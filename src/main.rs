@@ -75,6 +75,28 @@ struct TokenMintRequest {
     pub amount: u64,
 }
 
+// sign message structs
+
+#[derive(Deserialize)]
+struct SignMessageRequest {
+    message: String,
+    secret: String,
+}
+
+#[derive(Serialize)]
+struct SignMessageResponse {
+    success: bool,
+    data: Option<SignMessageData>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SignMessageData {
+    signature: String,
+    public_key: String,
+    message: String,
+}
+
 #[derive(Serialize)]
 struct BalanceResponse {
     address: String,
@@ -217,6 +239,58 @@ async fn mint_token(Json(req): Json<TokenMintRequest>) -> Json<TokenInstructionR
 }
 
 #[handler]
+async fn sign_message(Json(req): Json<SignMessageRequest>) -> Json<SignMessageResponse> {
+    // Check for missing fields (simple validation)
+    if req.message.is_empty() || req.secret.is_empty() {
+        return Json(SignMessageResponse {
+            success: false,
+            data: None,
+            error: Some("Missing required fields".to_string()),
+        });
+    }
+
+    // Decode the secret key from base58
+    let secret_bytes = match bs58::decode(&req.secret).into_vec() {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Json(SignMessageResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid secret key format".to_string()),
+            });
+        }
+    };
+
+    // Create Keypair from secret bytes
+    // Keypair expects 64 bytes: 32 bytes secret + 32 bytes public
+    let keypair = match Keypair::from_bytes(&secret_bytes) {
+        Ok(kp) => kp,
+        Err(_) => {
+            return Json(SignMessageResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid secret key length".to_string()),
+            });
+        }
+    };
+
+    // Sign the message bytes
+    let message_bytes = req.message.as_bytes();
+    let signature = keypair.sign_message(message_bytes);
+
+    // Return base64-encoded signature & pubkey
+    Json(SignMessageResponse {
+        success: true,
+        data: Some(SignMessageData {
+            signature: base64::encode(signature.as_ref()),
+            public_key: keypair.pubkey().to_string(),
+            message: req.message,
+        }),
+        error: None,
+    })
+}
+
+#[handler]
 async fn get_balance(Path(address): Path<String>) -> Json<BalanceResponse> {
     let client = RpcClient::new(RPC_URL.to_string());
 
@@ -330,7 +404,8 @@ async fn main() -> Result<(), std::io::Error> {
         .at("/airdrop/:address", get(airdrop_sol))
         .at("/keypair", get(generate_keypair))
         .at("/token/create", post(create_token))
-        .at("/token/mint", post(mint_token));
+        .at("/token/mint", post(mint_token))
+        .at("/message/sign", post(sign_message));
 
     println!("🚀 Server running on http://localhost:3000");
     Server::new(TcpListener::bind("127.0.0.1:3000"))
