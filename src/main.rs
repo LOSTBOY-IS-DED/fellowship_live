@@ -408,7 +408,7 @@ async fn main() -> Result<(), std::io::Error> {
         .at("/message/sign", post(sign_message));
 
     println!("🚀 Server running on http://localhost:3000");
-    Server::new(TcpListener::bind("127.0.0.1:3000"))
+    Server::new(TcpListener::bind("0.0.0.0:3000"))
         .run(app)
         .await
 }
