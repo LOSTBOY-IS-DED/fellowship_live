@@ -11,12 +11,13 @@ use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     bs58,
     commitment_config::CommitmentConfig,
+    instruction::AccountMeta,
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer, read_keypair_file},
     system_instruction,
     transaction::Transaction,
 };
-use spl_token::instruction::initialize_mint;
+use spl_token::instruction::{initialize_mint, mint_to};
 use std::str::FromStr;
 
 const RPC_URL: &str = "https://api.devnet.solana.com"; // Use devnet for safety
@@ -63,6 +64,15 @@ struct AccountMetaData {
     pubkey: String,
     is_signer: bool,
     is_writable: bool,
+}
+
+// struct for mint token
+#[derive(Deserialize)]
+struct TokenMintRequest {
+    pub mint: String,
+    pub destination: String,
+    pub authority: String,
+    pub amount: u64,
 }
 
 #[derive(Serialize)]
@@ -152,6 +162,58 @@ fn error_response(msg: &str) -> TokenInstructionResponse {
             instruction_data: msg.to_string(),
         },
     }
+}
+
+#[handler]
+async fn mint_token(Json(req): Json<TokenMintRequest>) -> Json<TokenInstructionResponse> {
+    // Parse pubkeys from strings
+    let mint_pubkey = match Pubkey::from_str(&req.mint) {
+        Ok(pk) => pk,
+        Err(_) => return Json(error_response("Invalid mint pubkey")),
+    };
+    let destination_pubkey = match Pubkey::from_str(&req.destination) {
+        Ok(pk) => pk,
+        Err(_) => return Json(error_response("Invalid destination pubkey")),
+    };
+    let authority_pubkey = match Pubkey::from_str(&req.authority) {
+        Ok(pk) => pk,
+        Err(_) => return Json(error_response("Invalid authority pubkey")),
+    };
+
+    // Create mint_to instruction
+    let ix = match mint_to(
+        &spl_token::id(),
+        &mint_pubkey,
+        &destination_pubkey,
+        &authority_pubkey,
+        &[],
+        req.amount,
+    ) {
+        Ok(instruction) => instruction,
+        Err(_) => return Json(error_response("Failed to create mint_to instruction")),
+    };
+
+    // Map instruction accounts to your API format
+    let accounts = ix
+        .accounts
+        .into_iter()
+        .map(|meta| AccountMetaData {
+            pubkey: meta.pubkey.to_string(),
+            is_signer: meta.is_signer,
+            is_writable: meta.is_writable,
+        })
+        .collect();
+
+    let instruction_data = base64::encode(&ix.data);
+
+    Json(TokenInstructionResponse {
+        success: true,
+        data: TokenInstructionData {
+            program_id: ix.program_id.to_string(),
+            accounts,
+            instruction_data,
+        },
+    })
 }
 
 #[handler]
@@ -267,7 +329,8 @@ async fn main() -> Result<(), std::io::Error> {
         .at("/send", post(send_sol))
         .at("/airdrop/:address", get(airdrop_sol))
         .at("/keypair", get(generate_keypair))
-        .at("/token/create", post(create_token));
+        .at("/token/create", post(create_token))
+        .at("/token/mint", post(mint_token));
 
     println!("🚀 Server running on http://localhost:3000");
     Server::new(TcpListener::bind("127.0.0.1:3000"))
